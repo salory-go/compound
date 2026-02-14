@@ -3,10 +3,11 @@
  * Shows stats, growth curve, quote, health snapshot, and CTA
  */
 import { Chart, registerables } from 'chart.js';
-import { getStats, getAllEntries, getTodayEntry, getYesterdayEntry, isFirstVisit } from '../lib/storage.js';
+import { getStats, getAllEntries, getEntriesSorted, getTodayEntry, getYesterdayEntry, isFirstVisit, saveAnalysis } from '../lib/storage.js';
 import { calculateCompoundValue, generateGrowthCurve, getMultiplier } from '../lib/compound.js';
 import { getTodayQuote } from '../lib/quotes.js';
 import { navigate } from '../lib/router.js';
+import { requestAnalysis } from '../lib/ai.js';
 
 Chart.register(...registerables);
 
@@ -64,6 +65,9 @@ export function renderDashboard(container) {
       <!-- Today's Entry Preview -->
       ${todayEntry ? renderTodayPreview(todayEntry) : ''}
 
+      <!-- AI Analysis -->
+      ${todayEntry ? renderAISection(todayEntry) : ''}
+
       <!-- Growth Curve -->
       <div class="card mb-lg">
         <div class="section-label">📈 成长曲线 ${multiplier > 1 ? `<span style="color: var(--accent)">×${multiplier} 复利倍数</span>` : ''}</div>
@@ -110,6 +114,46 @@ export function renderDashboard(container) {
     requestAnimationFrame(() => {
       if (previewText.scrollHeight <= previewText.clientHeight + 2) {
         previewToggle.style.display = 'none';
+      }
+    });
+  }
+
+  // AI Analysis button
+  const aiBtn = container.querySelector('#ai-analyze-btn');
+  if (aiBtn) {
+    aiBtn.addEventListener('click', async () => {
+      const todayData = getTodayEntry();
+      if (!todayData) return;
+
+      // Show loading state
+      aiBtn.disabled = true;
+      aiBtn.innerHTML = '<span class="ai-loading">🤖 正在分析中...</span>';
+
+      // Get recent entries for context (last 7 days, excluding today)
+      const recent = getEntriesSorted()
+        .filter(e => e.id !== todayData.id)
+        .slice(0, 7);
+
+      const analysis = await requestAnalysis(todayData, recent);
+
+      if (analysis) {
+        // Save analysis to local + cloud
+        await saveAnalysis(todayData.id, analysis);
+
+        // Render the analysis card
+        const aiSection = container.querySelector('#ai-section');
+        if (aiSection) {
+          aiSection.innerHTML = renderAnalysisCard(analysis);
+        }
+      } else {
+        aiBtn.disabled = false;
+        aiBtn.innerHTML = '🤖 AI 点评';
+        // Show error toast
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+        toast.textContent = '❌ 分析失败，请稍后重试';
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
       }
     });
   }
@@ -176,6 +220,26 @@ function renderYesterdayReminder(yesterdayEntry, todayEntry) {
     <div class="card mb-lg" style="border-color: rgba(245, 158, 11, 0.2); background: rgba(245, 158, 11, 0.04);">
       <div class="section-label">📌 昨天的你说：</div>
       <div style="font-size: 0.95rem; color: var(--text-accent); line-height: 1.7;">“${escapeHtml(yesterdayEntry.tomorrow)}”</div>
+    </div>
+  `;
+}
+
+function renderAISection(entry) {
+  if (entry.analysis) {
+    return `<div id="ai-section">${renderAnalysisCard(entry.analysis)}</div>`;
+  }
+  return `
+    <div id="ai-section">
+      <button class="btn-ai" id="ai-analyze-btn">🤖 AI 点评</button>
+    </div>
+  `;
+}
+
+function renderAnalysisCard(analysis) {
+  return `
+    <div class="card mb-lg ai-card">
+      <div class="section-label" style="color: var(--ai-accent, #a78bfa);">🤖 AI 成长教练</div>
+      <div class="ai-card__text">${escapeHtml(analysis)}</div>
     </div>
   `;
 }

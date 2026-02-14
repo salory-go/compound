@@ -53,6 +53,32 @@ export async function saveEntry(entry) {
   return entry;
 }
 
+/**
+ * Save AI analysis for a specific entry.
+ * Updates both local cache and cloud.
+ */
+export async function saveAnalysis(entryId, analysis) {
+  // Update local
+  const entries = getAllEntries();
+  if (entries[entryId]) {
+    entries[entryId].analysis = analysis;
+    localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries));
+  }
+
+  // Update cloud
+  if (isCloudEnabled()) {
+    try {
+      await supabase
+        .from('entries')
+        .update({ analysis })
+        .eq('id', entryId);
+      console.log('[Compound] ☁️ Analysis saved to cloud');
+    } catch (e) {
+      console.warn('[Compound] Cloud analysis save failed:', e.message);
+    }
+  }
+}
+
 export function getEntry(dateStr) {
   const entries = getAllEntries();
   return entries[dateStr] || null;
