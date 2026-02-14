@@ -127,7 +127,7 @@ export function renderDashboard(container) {
 
       // Show loading state
       aiBtn.disabled = true;
-      aiBtn.innerHTML = '<span class="ai-loading">🤖 正在分析中...</span>';
+      aiBtn.innerHTML = '<span class="ai-loading">🧠 思考中...</span>';
 
       // Get recent entries for context (last 7 days, excluding today)
       const recent = getEntriesSorted()
@@ -147,7 +147,7 @@ export function renderDashboard(container) {
         }
       } else {
         aiBtn.disabled = false;
-        aiBtn.innerHTML = '🤖 AI 点评';
+        aiBtn.innerHTML = '🧠 认知陪练';
         // Show error toast
         const toast = document.createElement('div');
         toast.className = 'toast';
@@ -230,7 +230,7 @@ function renderAISection(entry) {
   }
   return `
     <div id="ai-section">
-      <button class="btn-ai" id="ai-analyze-btn">🤖 AI 点评</button>
+      <button class="btn-ai" id="ai-analyze-btn">🧠 认知陪练</button>
     </div>
   `;
 }
@@ -238,7 +238,7 @@ function renderAISection(entry) {
 function renderAnalysisCard(analysis) {
   return `
     <div class="card mb-lg ai-card">
-      <div class="section-label" style="color: var(--ai-accent, #a78bfa);">🤖 AI 成长教练</div>
+      <div class="section-label" style="color: var(--ai-accent, #a78bfa);">🧠 认知陪练</div>
       <div class="ai-card__text">${escapeHtml(analysis)}</div>
     </div>
   `;
