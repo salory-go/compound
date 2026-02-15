@@ -7,11 +7,12 @@ import { getStats, getAllEntries, getEntriesSorted, getTodayEntry, getYesterdayE
 import { calculateCompoundValue, generateGrowthCurve, getMultiplier } from '../lib/compound.js';
 import { getTodayQuote } from '../lib/quotes.js';
 import { navigate } from '../lib/router.js';
-import { requestAnalysis } from '../lib/ai.js';
+import { requestAnalysis, continueConversation } from '../lib/ai.js';
 
 Chart.register(...registerables);
 
 let chartInstance = null;
+const MAX_ROUNDS = 5;
 
 const HEALTH_LABELS = {
   sleptEarly: { icon: '🌙', label: '早睡' },
@@ -118,45 +119,8 @@ export function renderDashboard(container) {
     });
   }
 
-  // AI Analysis button
-  const aiBtn = container.querySelector('#ai-analyze-btn');
-  if (aiBtn) {
-    aiBtn.addEventListener('click', async () => {
-      const todayData = getTodayEntry();
-      if (!todayData) return;
-
-      // Show loading state
-      aiBtn.disabled = true;
-      aiBtn.innerHTML = '<span class="ai-loading">🧠 思考中...</span>';
-
-      // Get recent entries for context (last 7 days, excluding today)
-      const recent = getEntriesSorted()
-        .filter(e => e.id !== todayData.id)
-        .slice(0, 7);
-
-      const analysis = await requestAnalysis(todayData, recent);
-
-      if (analysis) {
-        // Save analysis to local + cloud
-        await saveAnalysis(todayData.id, analysis);
-
-        // Render the analysis card
-        const aiSection = container.querySelector('#ai-section');
-        if (aiSection) {
-          aiSection.innerHTML = renderAnalysisCard(analysis);
-        }
-      } else {
-        aiBtn.disabled = false;
-        aiBtn.innerHTML = '🧠 认知陪练';
-        // Show error toast
-        const toast = document.createElement('div');
-        toast.className = 'toast';
-        toast.textContent = '❌ 分析失败，请稍后重试';
-        document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 3000);
-      }
-    });
-  }
+  // AI conversation setup
+  setupAIConversation(container);
 }
 
 function renderWelcome() {
@@ -225,8 +189,14 @@ function renderYesterdayReminder(yesterdayEntry, todayEntry) {
 }
 
 function renderAISection(entry) {
-  if (entry.analysis) {
-    return `<div id="ai-section">${renderAnalysisCard(entry.analysis)}</div>`;
+  const analysis = entry.analysis;
+
+  // Normalize: old format was string, new format is array
+  if (analysis) {
+    const conversation = Array.isArray(analysis)
+      ? analysis
+      : [{ role: 'assistant', text: analysis }];
+    return `<div id="ai-section">${renderConversation(conversation)}</div>`;
   }
   return `
     <div id="ai-section">
@@ -235,13 +205,146 @@ function renderAISection(entry) {
   `;
 }
 
-function renderAnalysisCard(analysis) {
+function renderConversation(conversation) {
+  const rounds = conversation.filter(m => m.role === 'assistant').length;
+  const canReply = rounds < MAX_ROUNDS;
+
+  const bubbles = conversation.map(m => {
+    if (m.role === 'user' && m.isEntry) return ''; // skip the initial entry context
+    const cls = m.role === 'assistant' ? 'ai-bubble' : 'user-bubble';
+    const label = m.role === 'assistant' ? '🧠' : '💭';
+    return `<div class="chat-bubble ${cls}"><span class="chat-label">${label}</span><div class="chat-text">${escapeHtml(m.text)}</div></div>`;
+  }).join('');
+
+  const inputArea = canReply
+    ? `<div class="chat-input-area">
+        <textarea class="chat-input" id="ai-reply-input" placeholder="回应陪练的追问..." rows="2"></textarea>
+        <button class="btn-ai btn-ai--small" id="ai-reply-btn">发送</button>
+      </div>`
+    : `<div class="chat-ended">对话结束 · ${rounds}/${MAX_ROUNDS} 轮</div>`;
+
   return `
     <div class="card mb-lg ai-card">
-      <div class="section-label" style="color: var(--ai-accent, #a78bfa);">🧠 认知陪练</div>
-      <div class="ai-card__text">${escapeHtml(analysis)}</div>
+      <div class="section-label" style="color: var(--ai-accent, #a78bfa);">🧠 认知陪练 · ${rounds}/${MAX_ROUNDS}</div>
+      <div class="chat-history" id="chat-history">${bubbles}</div>
+      ${inputArea}
     </div>
   `;
+}
+
+function setupAIConversation(container) {
+  // Initial analysis button
+  const aiBtn = container.querySelector('#ai-analyze-btn');
+  if (aiBtn) {
+    aiBtn.addEventListener('click', async () => {
+      const todayData = getTodayEntry();
+      if (!todayData) return;
+
+      aiBtn.disabled = true;
+      aiBtn.innerHTML = '<span class="ai-loading">🧠 思考中...</span>';
+
+      const recent = getEntriesSorted()
+        .filter(e => e.id !== todayData.id)
+        .slice(0, 7);
+
+      const analysis = await requestAnalysis(todayData, recent);
+
+      if (analysis) {
+        // Build initial conversation
+        const conversation = [
+          { role: 'user', text: todayData.text, isEntry: true },
+          { role: 'assistant', text: analysis },
+        ];
+        await saveAnalysis(todayData.id, conversation);
+
+        const aiSection = container.querySelector('#ai-section');
+        if (aiSection) {
+          aiSection.innerHTML = renderConversation(conversation);
+          setupReplyHandler(container, todayData.id, conversation);
+        }
+      } else {
+        aiBtn.disabled = false;
+        aiBtn.innerHTML = '🧠 认知陪练';
+        showToast('❌ 分析失败，请稍后重试');
+      }
+    });
+  }
+
+  // If conversation already exists, setup reply handler
+  const todayData = getTodayEntry();
+  if (todayData?.analysis) {
+    const conversation = Array.isArray(todayData.analysis)
+      ? todayData.analysis
+      : [{ role: 'assistant', text: todayData.analysis }];
+    setupReplyHandler(container, todayData.id, conversation);
+  }
+}
+
+function setupReplyHandler(container, entryId, conversation) {
+  const replyBtn = container.querySelector('#ai-reply-btn');
+  const replyInput = container.querySelector('#ai-reply-input');
+  if (!replyBtn || !replyInput) return;
+
+  replyBtn.addEventListener('click', async () => {
+    const text = replyInput.value.trim();
+    if (!text) return;
+
+    // Add user message to conversation
+    conversation.push({ role: 'user', text });
+
+    // Update UI immediately
+    replyBtn.disabled = true;
+    replyBtn.innerHTML = '<span class="ai-loading">🧠</span>';
+    replyInput.disabled = true;
+
+    // Add user bubble to chat
+    const chatHistory = container.querySelector('#chat-history');
+    chatHistory.insertAdjacentHTML('beforeend',
+      `<div class="chat-bubble user-bubble"><span class="chat-label">💭</span><div class="chat-text">${escapeHtml(text)}</div></div>`
+    );
+    replyInput.value = '';
+
+    // Call AI with full conversation
+    const reply = await continueConversation(conversation);
+
+    if (reply) {
+      conversation.push({ role: 'assistant', text: reply });
+      await saveAnalysis(entryId, conversation);
+
+      // Re-render the whole conversation section
+      const aiSection = container.querySelector('#ai-section');
+      if (aiSection) {
+        aiSection.innerHTML = renderConversation(conversation);
+        setupReplyHandler(container, entryId, conversation);
+        // Scroll to bottom
+        const newHistory = container.querySelector('#chat-history');
+        if (newHistory) newHistory.scrollTop = newHistory.scrollHeight;
+      }
+    } else {
+      // Remove user message on failure
+      conversation.pop();
+      replyBtn.disabled = false;
+      replyBtn.innerHTML = '发送';
+      replyInput.disabled = false;
+      showToast('❌ 回复失败，请稍后重试');
+    }
+  });
+
+  // Enter to send (Shift+Enter for newline)
+  replyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      replyBtn.click();
+    }
+  });
+}
+
+function showToast(message) {
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
 }
 
 function escapeHtml(str) {

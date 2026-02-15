@@ -54,27 +54,32 @@ export async function saveEntry(entry) {
 }
 
 /**
- * Save AI analysis for a specific entry.
- * Updates both local cache and cloud.
+ * Save AI conversation for a specific entry.
+ * Stores full conversation history locally, flattened text to cloud.
+ * @param {string} entryId
+ * @param {Array} conversation - [{role: 'user'|'assistant', text: string}]
  */
-export async function saveAnalysis(entryId, analysis) {
-  // Update local
+export async function saveAnalysis(entryId, conversation) {
+  // Update local - store full conversation array
   const entries = getAllEntries();
   if (entries[entryId]) {
-    entries[entryId].analysis = analysis;
+    entries[entryId].analysis = conversation;
     localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries));
   }
 
-  // Update cloud
+  // Update cloud - store flattened text for compatibility
   if (isCloudEnabled()) {
     try {
+      const flatText = Array.isArray(conversation)
+        ? conversation.filter(m => m.role === 'assistant').map(m => m.text).join('\n\n---\n\n')
+        : conversation;
       await supabase
         .from('entries')
-        .update({ analysis })
+        .update({ analysis: flatText })
         .eq('id', entryId);
-      console.log('[Compound] ☁️ Analysis saved to cloud');
+      console.log('[Compound] ☁️ Conversation saved to cloud');
     } catch (e) {
-      console.warn('[Compound] Cloud analysis save failed:', e.message);
+      console.warn('[Compound] Cloud conversation save failed:', e.message);
     }
   }
 }
