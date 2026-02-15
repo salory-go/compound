@@ -101,8 +101,10 @@ function setupTopicEvents(container, topicsData, entries) {
                     const entryHtml = (topic.entryIds || []).map(id => {
                         const entry = entries[id];
                         if (!entry) return '';
-                        const preview = entry.text.length > 80 ? entry.text.slice(0, 80) + '...' : entry.text;
-                        return `<div class="topic-entry"><span class="topic-entry__date">${id}</span><span class="topic-entry__text">${escapeHtml(preview)}</span></div>`;
+                        return `<div class="topic-entry">
+                          <div class="topic-entry__date">${id}</div>
+                          <div class="topic-entry__text">${escapeHtml(entry.text)}</div>
+                        </div>`;
                     }).join('');
                     entriesDiv.innerHTML = entryHtml || '<div style="color: var(--text-tertiary); font-size: 0.85rem;">无关联条目</div>';
                 }

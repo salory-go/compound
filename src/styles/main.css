@@ -1045,25 +1045,30 @@ h3 {
   border-top: 1px solid rgba(255, 255, 255, 0.06);
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: var(--space-md);
   animation: chatFadeIn 0.3s ease-out;
 }
 
 .topic-entry {
-  display: flex;
-  gap: var(--space-sm);
-  align-items: baseline;
-  font-size: 0.85rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-left: 3px solid rgba(167, 139, 250, 0.3);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  padding: var(--space-md) var(--space-lg);
 }
 
 .topic-entry__date {
-  flex-shrink: 0;
-  color: var(--text-tertiary);
-  font-size: 0.75rem;
+  color: var(--ai-accent);
+  font-size: 0.72rem;
   font-family: 'Inter', monospace;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+  opacity: 0.8;
 }
 
 .topic-entry__text {
   color: var(--text-secondary);
-  line-height: 1.5;
+  font-size: 0.88rem;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
