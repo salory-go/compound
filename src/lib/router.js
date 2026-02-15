@@ -10,6 +10,7 @@ const routes = {
     '/': 'dashboard',
     '/checkin': 'checkin',
     '/history': 'history',
+    '/topics': 'topics',
 };
 
 export function initRouter(handler) {

@@ -6,6 +6,7 @@ import { initRouter, getCurrentRoute } from './lib/router.js';
 import { renderDashboard } from './pages/dashboard.js';
 import { renderCheckin } from './pages/checkin.js';
 import { renderHistory } from './pages/history.js';
+import { renderTopics } from './pages/topics.js';
 
 import { syncFromCloud, isFirstVisit } from './lib/storage.js';
 import { isCloudEnabled } from './lib/supabase.js';
@@ -26,6 +27,7 @@ function renderNav(activeRoute) {
       <button class="nav__item ${activeRoute === 'dashboard' ? 'active' : ''}" data-route="/">📊 仪表盘</button>
       <button class="nav__item ${activeRoute === 'checkin' ? 'active' : ''}" data-route="/checkin">📝 存入</button>
       <button class="nav__item ${activeRoute === 'history' ? 'active' : ''}" data-route="/history">📅 时间线</button>
+      <button class="nav__item ${activeRoute === 'topics' ? 'active' : ''}" data-route="/topics">🗂 主题</button>
     </nav>
   `;
 }
@@ -58,6 +60,9 @@ function renderPage(route) {
       break;
     case 'history':
       renderHistory(pageContainer);
+      break;
+    case 'topics':
+      renderTopics(pageContainer);
       break;
     default:
       renderDashboard(pageContainer);

@@ -113,6 +113,24 @@ export function getEntriesSorted() {
 }
 
 // ============================
+// Topics - Classification
+// ============================
+
+const TOPICS_KEY = 'compound_topics';
+
+export function saveTopics(data) {
+  localStorage.setItem(TOPICS_KEY, JSON.stringify(data));
+}
+
+export function getTopics() {
+  try {
+    return JSON.parse(localStorage.getItem(TOPICS_KEY)) || null;
+  } catch {
+    return null;
+  }
+}
+
+// ============================
 // Cloud Sync
 // ============================
 
