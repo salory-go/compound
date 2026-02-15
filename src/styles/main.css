@@ -1054,6 +1054,17 @@ h3 {
   border-left: 3px solid rgba(167, 139, 250, 0.3);
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
   padding: var(--space-md) var(--space-lg);
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.topic-entry:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.topic-entry.entry-expanded {
+  border-left-color: rgba(167, 139, 250, 0.6);
+  background: rgba(167, 139, 250, 0.04);
 }
 
 .topic-entry__date {
@@ -1065,10 +1076,32 @@ h3 {
   opacity: 0.8;
 }
 
-.topic-entry__text {
+.topic-entry__excerpt {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 500;
+  line-height: 1.7;
+}
+
+.topic-entry__full {
   color: var(--text-secondary);
-  font-size: 0.88rem;
+  font-size: 0.85rem;
   line-height: 1.8;
   white-space: pre-wrap;
   word-break: break-word;
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.topic-entry__toggle {
+  color: var(--text-tertiary);
+  font-size: 0.72rem;
+  margin-top: var(--space-sm);
+  text-align: right;
+  transition: color 0.2s ease;
+}
+
+.topic-entry:hover .topic-entry__toggle {
+  color: var(--ai-accent);
 }

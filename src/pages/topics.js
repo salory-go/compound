@@ -99,12 +99,29 @@ function setupTopicEvents(container, topicsData, entries) {
         if (!entriesDiv.innerHTML) {
           const topic = topicsData.topics[index];
           const entryHtml = (topic.entries || []).map(e => {
-            return `<div class="topic-entry">
+            const fullEntry = entries[e.id];
+            const fullText = fullEntry ? fullEntry.text : '';
+            return `<div class="topic-entry" data-entry-id="${e.id}">
                           <div class="topic-entry__date">${e.id}</div>
-                          <div class="topic-entry__text">${escapeHtml(e.excerpt)}</div>
+                          <div class="topic-entry__excerpt">${escapeHtml(e.excerpt)}</div>
+                          <div class="topic-entry__full" style="display: none;">${escapeHtml(fullText)}</div>
+                          <div class="topic-entry__toggle">▼ 展开原文</div>
                         </div>`;
           }).join('');
           entriesDiv.innerHTML = entryHtml || '<div style="color: var(--text-tertiary); font-size: 0.85rem;">无关联条目</div>';
+
+          // Entry expand/collapse
+          entriesDiv.querySelectorAll('.topic-entry').forEach(entryEl => {
+            entryEl.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              const fullDiv = entryEl.querySelector('.topic-entry__full');
+              const toggleDiv = entryEl.querySelector('.topic-entry__toggle');
+              const isShown = fullDiv.style.display !== 'none';
+              fullDiv.style.display = isShown ? 'none' : 'block';
+              toggleDiv.textContent = isShown ? '▼ 展开原文' : '▲ 收起';
+              entryEl.classList.toggle('entry-expanded', !isShown);
+            });
+          });
         }
         entriesDiv.style.display = 'block';
         card.classList.add('expanded');
