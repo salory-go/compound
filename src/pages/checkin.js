@@ -134,7 +134,7 @@ function setupCheckinEvents(container, isEdit) {
   });
 
   // Submit
-  container.querySelector('#submit-btn').addEventListener('click', async () => {
+  container.querySelector('#submit-btn').addEventListener('click', () => {
     const textEl = container.querySelector('#checkin-text');
     const text = textEl.value.trim();
 
@@ -161,7 +161,6 @@ function setupCheckinEvents(container, isEdit) {
     // Collect tomorrow plan
     const tomorrow = container.querySelector('#checkin-tomorrow').value.trim();
 
-    // Save entry (async: writes to cloud + local)
     const entry = {
       id: todayStr(),
       timestamp: Date.now(),
@@ -171,13 +170,20 @@ function setupCheckinEvents(container, isEdit) {
       tomorrow,
     };
 
-    await saveEntry(entry);
+    // Disable button immediately with animation
+    const btn = container.querySelector('#submit-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="ai-loading">⏳ 保存中...</span>';
 
-    // Show toast and navigate
+    // Fire-and-forget: saveEntry writes localStorage synchronously inside,
+    // then syncs to cloud in the background. No await needed.
+    saveEntry(entry);
+
+    // Immediate feedback
     showToast(isEdit ? '💾 已更新！' : '✅ 存入成功！你的复利资产在增长。');
     setTimeout(() => {
       navigate('/');
-    }, 800);
+    }, 400);
   });
 }
 
