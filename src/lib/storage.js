@@ -113,22 +113,162 @@ export function getEntriesSorted() {
 }
 
 // ============================
-// Topics - Classification
+// Topics v4 - Config + Notes (separate storage)
 // ============================
 
-const TOPICS_KEY = 'compound_topics';
+const TOPICS_CONFIG_KEY = 'compound_topics_config';
+const TOPIC_NOTES_KEY = 'compound_topic_notes';
+const OLD_TOPICS_KEY = 'compound_topics'; // v3 legacy
 
-export function saveTopics(data) {
-  localStorage.setItem(TOPICS_KEY, JSON.stringify(data));
-}
+// --- Topic Config CRUD ---
 
-export function getTopics() {
+export function getTopicsConfig() {
   try {
-    return JSON.parse(localStorage.getItem(TOPICS_KEY)) || null;
+    return JSON.parse(localStorage.getItem(TOPICS_CONFIG_KEY)) || { topics: [] };
   } catch {
-    return null;
+    return { topics: [] };
   }
 }
+
+export function saveTopicsConfig(data) {
+  localStorage.setItem(TOPICS_CONFIG_KEY, JSON.stringify(data));
+}
+
+export function addTopic(name, description = '') {
+  const config = getTopicsConfig();
+  const topic = {
+    id: `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    name,
+    description,
+    order: config.topics.length,
+  };
+  config.topics.push(topic);
+  saveTopicsConfig(config);
+  return topic;
+}
+
+export function updateTopic(id, updates) {
+  const config = getTopicsConfig();
+  const topic = config.topics.find(t => t.id === id);
+  if (!topic) return false;
+  Object.assign(topic, updates);
+  saveTopicsConfig(config);
+  return true;
+}
+
+export function deleteTopic(id) {
+  const config = getTopicsConfig();
+  config.topics = config.topics.filter(t => t.id !== id);
+  saveTopicsConfig(config);
+  // Also remove topicId from notes
+  const notesData = getTopicNotes();
+  for (const note of notesData.notes) {
+    note.topicIds = note.topicIds.filter(tid => tid !== id);
+  }
+  // Remove orphan notes with no topics
+  notesData.notes = notesData.notes.filter(n => n.topicIds.length > 0);
+  saveTopicNotes(notesData);
+}
+
+// --- Notes CRUD ---
+
+export function getTopicNotes() {
+  try {
+    return JSON.parse(localStorage.getItem(TOPIC_NOTES_KEY)) || { notes: [], processedEntryIds: [] };
+  } catch {
+    return { notes: [], processedEntryIds: [] };
+  }
+}
+
+export function saveTopicNotes(data) {
+  localStorage.setItem(TOPIC_NOTES_KEY, JSON.stringify(data));
+}
+
+export function addNotes(notesToAdd, sourceEntryId) {
+  const data = getTopicNotes();
+  for (const n of notesToAdd) {
+    data.notes.push({
+      id: `n_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      content: n.content,
+      source: sourceEntryId,
+      topicIds: n.topicIds || [],
+      ts: Date.now(),
+    });
+  }
+  if (!data.processedEntryIds.includes(sourceEntryId)) {
+    data.processedEntryIds.push(sourceEntryId);
+  }
+  saveTopicNotes(data);
+}
+
+export function updateNote(noteId, updates) {
+  const data = getTopicNotes();
+  const note = data.notes.find(n => n.id === noteId);
+  if (!note) return false;
+  Object.assign(note, updates);
+  saveTopicNotes(data);
+  return true;
+}
+
+export function deleteNote(noteId) {
+  const data = getTopicNotes();
+  data.notes = data.notes.filter(n => n.id !== noteId);
+  saveTopicNotes(data);
+}
+
+export function isEntryProcessed(entryId) {
+  const data = getTopicNotes();
+  return data.processedEntryIds.includes(entryId);
+}
+
+// --- Migration v3 → v4 ---
+
+export function migrateTopicsV3toV4() {
+  const old = localStorage.getItem(OLD_TOPICS_KEY);
+  if (!old) return;
+  // Don't migrate if v4 already exists
+  if (localStorage.getItem(TOPICS_CONFIG_KEY)) return;
+
+  try {
+    const v3 = JSON.parse(old);
+    if (!v3 || !v3.topics) return;
+
+    const config = { topics: [] };
+    const notesData = { notes: [], processedEntryIds: v3.processedEntryIds || [] };
+
+    for (const t of v3.topics) {
+      const topicId = t.id || `t_migrated_${Math.random().toString(36).slice(2, 6)}`;
+      config.topics.push({
+        id: topicId,
+        name: t.name,
+        description: t.description || '',
+        order: config.topics.length,
+      });
+
+      const notes = t.notes || [];
+      for (const n of notes) {
+        notesData.notes.push({
+          id: n.id || `n_migrated_${Math.random().toString(36).slice(2, 6)}`,
+          content: n.content,
+          source: n.source,
+          topicIds: [topicId],
+          ts: n.ts || Date.now(),
+        });
+      }
+    }
+
+    saveTopicsConfig(config);
+    saveTopicNotes(notesData);
+    // Remove old key
+    localStorage.removeItem(OLD_TOPICS_KEY);
+  } catch (e) {
+    console.error('[Storage] Migration failed:', e);
+  }
+}
+
+// Legacy compat exports (existing code may still reference these)
+export function getTopics() { return getTopicsConfig(); }
+export function saveTopics(data) { saveTopicsConfig(data); }
 
 // ============================
 // Cloud Sync

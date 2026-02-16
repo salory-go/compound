@@ -1,162 +1,80 @@
 /**
- * Topics Page - Knowledge base with AI-powered split-and-file + git-like review
+ * Topics Page v4 - Topic management + article-mode note display
  * 
- * Three view states:
- * 1. Empty: No topics yet, show "start" button
- * 2. Library: Browse topics + notes, inline editing
- * 3. Review: AI proposals staging area, accept/reject individual notes
+ * Features:
+ * - Topic management bar (add/edit/delete topics with descriptions)
+ * - Article-mode notes: continuous flow with sequence numbers
+ * - Hover effect: note "pops up" as card
+ * - Filter by topic tag
  */
-import { getAllEntries, getEntriesSorted, getTopics, saveTopics } from '../lib/storage.js';
-import { supabase, isCloudEnabled } from '../lib/supabase.js';
+import { getTopicsConfig, getTopicNotes, addTopic, updateTopic, deleteTopic, updateNote, deleteNote, migrateTopicsV3toV4 } from '../lib/storage.js';
 
-const FUNCTION_NAME = 'classify';
-
-// Module-level state for background processing
-let pendingProposals = null;
-let isProcessing = false;
+let activeTopicId = null; // null = show all
 
 export function renderTopics(container) {
-  // Migrate old v2 data format
-  migrateOldFormat();
+  migrateTopicsV3toV4();
 
-  // If we have pending proposals from background processing, show review
-  if (pendingProposals) {
-    const proposals = pendingProposals;
-    pendingProposals = null;
-    removeNotificationBar();
-    renderReview(container, proposals);
+  const config = getTopicsConfig();
+  const notesData = getTopicNotes();
+  const { topics } = config;
+  const { notes } = notesData;
+
+  if (topics.length === 0 && notes.length === 0) {
+    renderEmpty(container);
     return;
   }
 
-  const topicsData = getTopics();
-  const entries = getAllEntries();
-  const entryCount = Object.keys(entries).length;
-
-  if (entryCount === 0) {
-    container.innerHTML = renderEmpty();
-    return;
-  }
-
-  if (!topicsData || !topicsData.topics || topicsData.topics.length === 0) {
-    renderFirstTime(container, entryCount);
-    return;
-  }
-
-  renderLibrary(container, topicsData);
-}
-
-function migrateOldFormat() {
-  const data = getTopics();
-  if (!data || !data.topics) return;
-  let changed = false;
-  // Ensure processedEntryIds
-  if (!data.processedEntryIds) {
-    data.processedEntryIds = [];
-    changed = true;
-  }
-  // Migrate entries→notes and remove old fields
-  for (const t of data.topics) {
-    if (!t.notes && t.entries) {
-      t.notes = t.entries.map(e => ({
-        id: `n_migrated_${Math.random().toString(36).slice(2, 6)}`,
-        source: e.id || 'unknown',
-        content: e.excerpt || e.content || '',
-        ts: Date.now(),
-      }));
-      delete t.entries;
-      changed = true;
-    }
-    if (!t.notes && t.entryIds) {
-      t.notes = [];
-      delete t.entryIds;
-      changed = true;
-    }
-    if (!t.notes) {
-      t.notes = [];
-      changed = true;
-    }
-  }
-  if (changed) saveTopics(data);
+  renderMain(container, topics, notes);
 }
 
 // ===========================
 // Empty State
 // ===========================
 
-function renderEmpty() {
-  return `
-    <div class="page-enter" style="text-align: center; padding-top: var(--space-xxl);">
-      <div style="font-size: 3rem; margin-bottom: var(--space-lg);">📭</div>
-      <h2 style="margin-bottom: var(--space-md);">还没有日记</h2>
-      <p style="color: var(--text-tertiary); margin-bottom: var(--space-xl);">先存入几天日记，再来整理主题吧。</p>
-      <button class="btn-primary" onclick="location.hash='/checkin'">📝 去存入</button>
-    </div>
-  `;
-}
-
-// ===========================
-// First Time
-// ===========================
-
-function renderFirstTime(container, count) {
+function renderEmpty(container) {
   container.innerHTML = `
     <div class="page-enter" style="text-align: center; padding-top: var(--space-xxl);">
-      <div style="font-size: 3rem; margin-bottom: var(--space-lg);">🗂</div>
-      <h2 style="margin-bottom: var(--space-md);">整理你的思考</h2>
+      <div style="font-size: 3rem; margin-bottom: var(--space-lg);">📭</div>
+      <h2 style="margin-bottom: var(--space-md);">还没有主题</h2>
       <p style="color: var(--text-tertiary); margin-bottom: var(--space-xl);">
-        AI 会阅读你的 <strong>${count}</strong> 条日记，拆解出独立观点，归入主题。
+        去时间线对日记点「📋 整理」开始分类，<br>或者先创建几个主题。
       </p>
-      <button class="btn-ai" id="classify-btn" style="max-width: 300px; margin: 0 auto;"
-        ${isProcessing ? 'disabled' : ''}>
-        ${isProcessing ? '⏳ 正在整理...' : '🧠 开始整理'}
-      </button>
+      <div style="display: flex; gap: 12px; justify-content: center;">
+        <button class="btn-primary" onclick="location.hash='/history'">📅 去时间线</button>
+        <button class="btn-outline" id="create-first-topic">➕ 创建主题</button>
+      </div>
     </div>
   `;
-  if (!isProcessing) {
-    container.querySelector('#classify-btn').addEventListener('click', () => doClassify());
-  }
+
+  container.querySelector('#create-first-topic').addEventListener('click', () => {
+    promptNewTopic(container);
+  });
 }
 
 // ===========================
-// Library View (main view)
+// Main View
 // ===========================
 
-function renderLibrary(container, topicsData) {
-  const { topics, processedEntryIds = [] } = topicsData;
+function renderMain(container, topics, notes) {
+  // Filter notes
+  const filteredNotes = activeTopicId
+    ? notes.filter(n => n.topicIds.includes(activeTopicId))
+    : notes;
 
-  // Check for unprocessed entries
-  const allEntryIds = Object.keys(getAllEntries());
-  const unprocessed = allEntryIds.filter(id => !processedEntryIds.includes(id));
-  const hasNew = unprocessed.length > 0;
+  // Sort by timestamp desc
+  const sortedNotes = [...filteredNotes].sort((a, b) => (b.ts || 0) - (a.ts || 0));
 
-  const topicCards = topics.map((topic, ti) => {
-    const noteItems = (topic.notes || []).map((note, ni) => `
-      <div class="topic-note" data-topic="${ti}" data-note="${ni}">
-        <div class="topic-note__header">
-          <span class="topic-note__source">${note.source}</span>
-          <div class="topic-note__actions">
-            <button class="note-action edit-note-btn" title="编辑">✏️</button>
-            <button class="note-action delete-note-btn" title="删除">🗑</button>
-          </div>
-        </div>
-        <div class="topic-note__content">${esc(note.content)}</div>
-      </div>
-    `).join('');
-
-    return `
-      <div class="topic-card" data-topic-index="${ti}">
-        <div class="topic-card__header">
-          <div class="topic-card__name" data-topic="${ti}">${esc(topic.name)}</div>
-          <div class="topic-card__meta">
-            <span class="topic-card__count">${(topic.notes || []).length} 条</span>
-            <button class="note-action edit-topic-btn" data-topic="${ti}" title="编辑主题名">✏️</button>
-          </div>
-        </div>
-        <div class="topic-card__desc">${esc(topic.description)}</div>
-        <div class="topic-notes">${noteItems}</div>
-      </div>
-    `;
+  // Topic tags
+  const tagItems = topics.map(t => {
+    const count = notes.filter(n => n.topicIds.includes(t.id)).length;
+    const active = activeTopicId === t.id ? 'topic-tag--active' : '';
+    return `<button class="topic-tag ${active}" data-topic-id="${t.id}">
+      ${esc(t.name)} <span class="topic-tag__count">${count}</span>
+    </button>`;
   }).join('');
+
+  const totalNotes = notes.length;
+  const allActive = !activeTopicId ? 'topic-tag--active' : '';
 
   container.innerHTML = `
     <div class="page-enter">
@@ -164,38 +82,101 @@ function renderLibrary(container, topicsData) {
         <div>
           <h2 style="margin: 0;">🗂 思考主题</h2>
           <div style="color: var(--text-tertiary); font-size: 0.75rem; margin-top: 4px;">
-            ${topics.length} 个主题 · ${topics.reduce((s, t) => s + (t.notes || []).length, 0)} 条笔记
+            ${topics.length} 个主题 · ${totalNotes} 条笔记
           </div>
         </div>
-      <button class="btn-ai btn-ai--small" id="classify-btn" ${isProcessing ? 'disabled' : ''}>
-          ${isProcessing ? '⏳ 整理中...' : (hasNew ? `🧠 整理新日记 (${unprocessed.length})` : '🧠 重新整理全部')}
-        </button>
       </div>
-      ${hasNew ? `<div class="topics-hint">📌 有 ${unprocessed.length} 条新日记未整理</div>` : ''}
-      <div class="topics-grid">${topicCards}</div>
+
+      <div class="topic-tags-bar">
+        <button class="topic-tag ${allActive}" data-topic-id="__all__">全部 <span class="topic-tag__count">${totalNotes}</span></button>
+        ${tagItems}
+        <button class="topic-tag topic-tag--add" id="add-topic-btn">➕ 新增</button>
+      </div>
+
+      ${activeTopicId ? renderTopicMeta(topics.find(t => t.id === activeTopicId)) : ''}
+
+      <div class="article-notes">
+        ${sortedNotes.length === 0
+      ? '<div style="text-align:center; color:var(--text-tertiary); padding: var(--space-xl);">暂无笔记</div>'
+      : sortedNotes.map((note, i) => renderArticleNote(note, i + 1, topics)).join('')
+    }
+      </div>
     </div>
   `;
 
-  setupLibraryEvents(container, topicsData, hasNew);
+  setupTopicEvents(container, topics, notes);
 }
 
-function setupLibraryEvents(container, topicsData, hasNew) {
-  // Classify button
-  if (!isProcessing) {
-    container.querySelector('#classify-btn').addEventListener('click', () => {
-      doClassify(hasNew ? false : true);
+function renderTopicMeta(topic) {
+  if (!topic) return '';
+  return `
+    <div class="topic-meta">
+      <div class="topic-meta__name">
+        <span>${esc(topic.name)}</span>
+        <button class="note-action edit-topic-name-btn" data-topic-id="${topic.id}" title="编辑主题名">✏️</button>
+      </div>
+      <div class="topic-meta__desc" data-topic-id="${topic.id}">
+        ${topic.description ? esc(topic.description) : '<span style="opacity:0.4">点击添加描述，帮助 AI 更准确分类</span>'}
+      </div>
+      <button class="btn-outline btn-outline--danger topic-delete-btn" data-topic-id="${topic.id}" style="margin-top: 8px; font-size: 0.75rem; padding: 4px 12px;">
+        🗑 删除此主题
+      </button>
+    </div>
+  `;
+}
+
+function renderArticleNote(note, index, topics) {
+  const topicNames = note.topicIds
+    .map(id => topics.find(t => t.id === id))
+    .filter(Boolean)
+    .map(t => `<span class="note-topic-tag">${esc(t.name)}</span>`)
+    .join('');
+
+  return `
+    <div class="article-note" data-note-id="${note.id}">
+      <div class="article-note__index">${index}</div>
+      <div class="article-note__body">
+        <div class="article-note__content">${esc(note.content)}</div>
+        <div class="article-note__footer">
+          <span class="article-note__source">${note.source}</span>
+          <div class="article-note__topics">${topicNames}</div>
+        </div>
+      </div>
+      <div class="article-note__actions">
+        <button class="note-action edit-note-btn" data-note-id="${note.id}" title="编辑">✏️</button>
+        <button class="note-action delete-note-btn" data-note-id="${note.id}" title="删除">🗑</button>
+      </div>
+    </div>
+  `;
+}
+
+// ===========================
+// Events
+// ===========================
+
+function setupTopicEvents(container, topics, notes) {
+  // Topic tag filter
+  container.querySelectorAll('.topic-tag:not(.topic-tag--add)').forEach(tag => {
+    tag.addEventListener('click', () => {
+      const id = tag.dataset.topicId;
+      activeTopicId = id === '__all__' ? null : id;
+      renderTopics(container);
     });
-  }
+  });
+
+  // Add topic
+  container.querySelector('#add-topic-btn')?.addEventListener('click', () => {
+    promptNewTopic(container);
+  });
 
   // Edit topic name
-  container.querySelectorAll('.edit-topic-btn').forEach(btn => {
+  container.querySelectorAll('.edit-topic-name-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const ti = parseInt(btn.dataset.topic);
-      const topic = topicsData.topics[ti];
-      const nameEl = container.querySelector(`.topic-card__name[data-topic="${ti}"]`);
+      const topicId = btn.dataset.topicId;
+      const topic = topics.find(t => t.id === topicId);
+      const nameEl = btn.previousElementSibling;
 
-      // Replace with input
       const input = document.createElement('input');
       input.type = 'text';
       input.value = topic.name;
@@ -207,13 +188,55 @@ function setupLibraryEvents(container, topicsData, hasNew) {
       const save = () => {
         const newName = input.value.trim();
         if (newName && newName !== topic.name) {
-          topicsData.topics[ti].name = newName;
-          saveTopics(topicsData);
+          updateTopic(topicId, { name: newName });
         }
-        renderLibrary(container, getTopics());
+        renderTopics(container);
       };
       input.addEventListener('blur', save);
       input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') save(); });
+    });
+  });
+
+  // Edit topic description (click on desc area)
+  container.querySelectorAll('.topic-meta__desc').forEach(descEl => {
+    descEl.addEventListener('click', () => {
+      const topicId = descEl.dataset.topicId;
+      const topic = topics.find(t => t.id === topicId);
+
+      const textarea = document.createElement('textarea');
+      textarea.className = 'inline-edit-textarea';
+      textarea.value = topic.description || '';
+      textarea.placeholder = '描述这个主题的范围，帮助 AI 更准确分类...';
+      descEl.replaceWith(textarea);
+      textarea.focus();
+      autoResize(textarea);
+
+      const save = () => {
+        const newDesc = textarea.value.trim();
+        updateTopic(topicId, { description: newDesc });
+        renderTopics(container);
+      };
+      textarea.addEventListener('blur', save);
+      textarea.addEventListener('input', () => autoResize(textarea));
+    });
+  });
+
+  // Delete topic
+  container.querySelectorAll('.topic-delete-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const topicId = btn.dataset.topicId;
+      const topic = topics.find(t => t.id === topicId);
+      const noteCount = notes.filter(n => n.topicIds.includes(topicId)).length;
+
+      btn.innerHTML = `确认删除「${esc(topic.name)}」？(${noteCount} 条笔记受影响)`;
+      btn.style.background = 'rgba(239, 68, 68, 0.2)';
+
+      btn.addEventListener('click', () => {
+        deleteTopic(topicId);
+        activeTopicId = null;
+        showToast(`🗑 已删除主题「${topic.name}」`);
+        renderTopics(container);
+      }, { once: true });
     });
   });
 
@@ -221,11 +244,10 @@ function setupLibraryEvents(container, topicsData, hasNew) {
   container.querySelectorAll('.edit-note-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const noteEl = btn.closest('.topic-note');
-      const ti = parseInt(noteEl.dataset.topic);
-      const ni = parseInt(noteEl.dataset.note);
-      const contentEl = noteEl.querySelector('.topic-note__content');
-      const note = topicsData.topics[ti].notes[ni];
+      const noteId = btn.dataset.noteId;
+      const noteEl = btn.closest('.article-note');
+      const contentEl = noteEl.querySelector('.article-note__content');
+      const note = notes.find(n => n.id === noteId);
 
       const textarea = document.createElement('textarea');
       textarea.className = 'inline-edit-textarea';
@@ -237,10 +259,9 @@ function setupLibraryEvents(container, topicsData, hasNew) {
       const save = () => {
         const newContent = textarea.value.trim();
         if (newContent && newContent !== note.content) {
-          topicsData.topics[ti].notes[ni].content = newContent;
-          saveTopics(topicsData);
+          updateNote(noteId, { content: newContent });
         }
-        renderLibrary(container, getTopics());
+        renderTopics(container);
       };
       textarea.addEventListener('blur', save);
       textarea.addEventListener('input', () => autoResize(textarea));
@@ -251,265 +272,55 @@ function setupLibraryEvents(container, topicsData, hasNew) {
   container.querySelectorAll('.delete-note-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const noteEl = btn.closest('.topic-note');
-      const ti = parseInt(noteEl.dataset.topic);
-      const ni = parseInt(noteEl.dataset.note);
+      const noteId = btn.dataset.noteId;
+      const noteEl = btn.closest('.article-note');
 
       noteEl.style.opacity = '0.3';
-      noteEl.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center; padding: 4px 0;">
-        <span style="color:var(--text-tertiary); font-size:0.85rem;">确认删除？</span>
-        <div>
-          <button class="note-action confirm-delete">✓ 确认</button>
-          <button class="note-action cancel-delete">✗ 取消</button>
-        </div>
-      </div>`;
+      const actionsEl = noteEl.querySelector('.article-note__actions');
+      actionsEl.innerHTML = `
+        <button class="note-action confirm-del">✓</button>
+        <button class="note-action cancel-del">✗</button>
+      `;
 
-      noteEl.querySelector('.confirm-delete').addEventListener('click', (ev) => {
+      actionsEl.querySelector('.confirm-del').addEventListener('click', (ev) => {
         ev.stopPropagation();
-        topicsData.topics[ti].notes.splice(ni, 1);
-        // Remove empty topics
-        if (topicsData.topics[ti].notes.length === 0) {
-          topicsData.topics.splice(ti, 1);
-        }
-        saveTopics(topicsData);
-        renderLibrary(container, getTopics());
+        deleteNote(noteId);
+        showToast('🗑 已删除');
+        renderTopics(container);
       });
-      noteEl.querySelector('.cancel-delete').addEventListener('click', (ev) => {
+      actionsEl.querySelector('.cancel-del').addEventListener('click', (ev) => {
         ev.stopPropagation();
-        renderLibrary(container, getTopics());
+        renderTopics(container);
       });
     });
   });
 }
 
-// ===========================
-// Review Mode (git-like staging)
-// ===========================
+function promptNewTopic(container) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = '输入主题名称...';
+  input.className = 'inline-edit-input';
+  input.style.cssText = 'max-width: 250px; margin: 12px auto; display: block;';
 
-function renderReview(container, proposals) {
-  // Group by topic
-  const groups = {};
-  proposals.forEach((p, i) => {
-    const key = p.topic;
-    if (!groups[key]) {
-      groups[key] = { topic: p.topic, desc: p.topicDesc, isNew: p.isNew, items: [] };
-    }
-    groups[key].items.push({ ...p, index: i });
-  });
-
-  const groupList = Object.values(groups);
-  const newCount = groupList.filter(g => g.isNew).length;
-  const existingCount = groupList.length - newCount;
-
-  const groupCards = groupList.map(group => {
-    const badge = group.isNew
-      ? '<span class="review-badge review-badge--new">🆕 新建主题</span>'
-      : '<span class="review-badge review-badge--add">📌 追加</span>';
-
-    const items = group.items.map(item => `
-      <label class="review-item">
-        <input type="checkbox" class="review-checkbox" data-index="${item.index}" checked>
-        <div class="review-item__body">
-          <span class="review-item__source">[${item.source}]</span>
-          <span class="review-item__content">${esc(item.content)}</span>
-        </div>
-      </label>
-    `).join('');
-
-    return `
-      <div class="review-group">
-        <div class="review-group__header">
-          ${badge}
-          <span class="review-group__name">${esc(group.topic)}</span>
-          <span class="review-group__desc">— ${esc(group.desc)}</span>
-        </div>
-        <div class="review-group__items">${items}</div>
-      </div>
-    `;
-  }).join('');
-
-  container.innerHTML = `
-    <div class="page-enter">
-      <div class="review-header">
-        <h2 style="margin: 0;">📋 整理结果</h2>
-        <div style="color: var(--text-tertiary); font-size: 0.8rem; margin-top: 4px;">
-          ${proposals.length} 条笔记 → ${groupList.length} 个主题
-          ${newCount > 0 ? `（${newCount} 个新建）` : ''}
-        </div>
-      </div>
-      <div class="review-actions-top">
-        <label class="review-select-all">
-          <input type="checkbox" id="select-all" checked> 全选
-        </label>
-      </div>
-      <div class="review-groups">${groupCards}</div>
-      <div class="review-actions">
-        <button class="btn-primary" id="merge-btn">✅ 确认合并</button>
-        <button class="btn-outline" id="discard-btn">❌ 放弃</button>
-      </div>
-    </div>
-  `;
-
-  // Select all
-  container.querySelector('#select-all').addEventListener('change', (e) => {
-    container.querySelectorAll('.review-checkbox').forEach(cb => { cb.checked = e.target.checked; });
-  });
-
-  // Merge
-  container.querySelector('#merge-btn').addEventListener('click', () => {
-    const selected = [];
-    container.querySelectorAll('.review-checkbox:checked').forEach(cb => {
-      selected.push(proposals[parseInt(cb.dataset.index)]);
-    });
-
-    if (selected.length === 0) {
-      showToast('⚠️ 至少选择一条笔记');
-      return;
-    }
-
-    mergeProposals(selected);
-    showToast(`✅ 已合并 ${selected.length} 条笔记`);
-    renderTopics(container);
-  });
-
-  // Discard
-  container.querySelector('#discard-btn').addEventListener('click', () => {
-    showToast('已放弃本次整理');
-    renderTopics(container);
-  });
-}
-
-function mergeProposals(accepted) {
-  const topicsData = getTopics() || { processedEntryIds: [], topics: [] };
-  if (!topicsData.processedEntryIds) topicsData.processedEntryIds = [];
-
-  for (const p of accepted) {
-    // Find or create topic
-    let topic = topicsData.topics.find(t => t.name === p.topic);
-    if (!topic) {
-      topic = {
-        id: `t${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        name: p.topic,
-        description: p.topicDesc,
-        notes: [],
-      };
-      topicsData.topics.push(topic);
-    }
-
-    // Ensure notes array exists (guard against old data)
-    if (!topic.notes) topic.notes = [];
-
-    // Add note
-    topic.notes.push({
-      id: `n${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      source: p.source,
-      content: p.content,
-      ts: Date.now(),
-    });
-
-    // Mark source as processed
-    if (!topicsData.processedEntryIds.includes(p.source)) {
-      topicsData.processedEntryIds.push(p.source);
-    }
-  }
-
-  saveTopics(topicsData);
-}
-
-// ===========================
-// Classify (call AI)
-// ===========================
-
-async function doClassify(forceAll = false) {
-  if (isProcessing) {
-    showToast('⏳ 正在整理中，请稍候...');
-    return;
-  }
-
-  if (!isCloudEnabled()) {
-    showToast('❌ 需要云端连接才能使用 AI 整理');
-    return;
-  }
-
-  const topicsData = getTopics() || { processedEntryIds: [], topics: [] };
-  const allEntries = getEntriesSorted();
-
-  // Determine which entries to process
-  let entriesToProcess;
-  if (forceAll) {
-    entriesToProcess = allEntries;
+  const addBtn = container.querySelector('#add-topic-btn') || container.querySelector('#create-first-topic');
+  if (addBtn) {
+    addBtn.replaceWith(input);
   } else {
-    const processedIds = topicsData.processedEntryIds || [];
-    entriesToProcess = allEntries.filter(e => !processedIds.includes(e.id));
-    if (entriesToProcess.length === 0) {
-      entriesToProcess = allEntries;
-    }
+    container.appendChild(input);
   }
+  input.focus();
 
-  // Start background processing
-  isProcessing = true;
-  showToast(`🧠 正在后台整理 ${entriesToProcess.length} 条日记...`);
-  showNotificationBar('⏳ AI 正在拆解日记，你可以继续浏览其他页面...');
-
-  const entries = entriesToProcess.map(e => ({ id: e.id, text: e.text }));
-  const existingTopics = topicsData.topics.map(t => ({ name: t.name, description: t.description }));
-
-  try {
-    const { data, error } = await supabase.functions.invoke(FUNCTION_NAME, {
-      body: { entries, existingTopics: existingTopics.length > 0 ? existingTopics : undefined },
-    });
-
-    isProcessing = false;
-
-    if (error) {
-      console.error('[Topics] Classification error:', error);
-      showToast('❌ 整理失败: ' + (error.message || '未知错误'));
-      removeNotificationBar();
-      return;
+  const save = () => {
+    const name = input.value.trim();
+    if (name) {
+      addTopic(name, '');
+      showToast(`✅ 已创建主题「${name}」`);
     }
-
-    const proposals = data?.proposals;
-    if (!proposals || !Array.isArray(proposals) || proposals.length === 0) {
-      console.error('[Topics] Invalid response:', JSON.stringify(data));
-      showToast('❌ AI 未返回有效结果');
-      removeNotificationBar();
-      return;
-    }
-
-    // Store results and notify
-    pendingProposals = proposals;
-    showNotificationBar(`✅ 整理完成！拆出 ${proposals.length} 条笔记`, true);
-    showToast(`✅ 整理完成！点击通知栏查看结果`);
-  } catch (e) {
-    isProcessing = false;
-    console.error('[Topics] Request failed:', e);
-    showToast('❌ 网络错误: ' + e.message);
-    removeNotificationBar();
-  }
-}
-
-// ===========================
-// Notification Bar (persistent, cross-page)
-// ===========================
-
-function showNotificationBar(text, clickable = false) {
-  removeNotificationBar();
-  const bar = document.createElement('div');
-  bar.id = 'topics-notification';
-  bar.className = 'topics-notification' + (clickable ? ' topics-notification--ready' : '');
-  bar.textContent = text;
-  if (clickable) {
-    bar.style.cursor = 'pointer';
-    bar.addEventListener('click', () => {
-      window.location.hash = '/topics';
-    });
-  }
-  document.body.appendChild(bar);
-}
-
-function removeNotificationBar() {
-  const bar = document.getElementById('topics-notification');
-  if (bar) bar.remove();
+    renderTopics(container);
+  };
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
 }
 
 // ===========================
