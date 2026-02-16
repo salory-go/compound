@@ -11,9 +11,22 @@ import { supabase, isCloudEnabled } from '../lib/supabase.js';
 
 const FUNCTION_NAME = 'classify';
 
+// Module-level state for background processing
+let pendingProposals = null;
+let isProcessing = false;
+
 export function renderTopics(container) {
   // Migrate old v2 data format
   migrateOldFormat();
+
+  // If we have pending proposals from background processing, show review
+  if (pendingProposals) {
+    const proposals = pendingProposals;
+    pendingProposals = null;
+    removeNotificationBar();
+    renderReview(container, proposals);
+    return;
+  }
 
   const topicsData = getTopics();
   const entries = getAllEntries();
@@ -93,10 +106,15 @@ function renderFirstTime(container, count) {
       <p style="color: var(--text-tertiary); margin-bottom: var(--space-xl);">
         AI 会阅读你的 <strong>${count}</strong> 条日记，拆解出独立观点，归入主题。
       </p>
-      <button class="btn-ai" id="classify-btn" style="max-width: 300px; margin: 0 auto;">🧠 开始整理</button>
+      <button class="btn-ai" id="classify-btn" style="max-width: 300px; margin: 0 auto;"
+        ${isProcessing ? 'disabled' : ''}>
+        ${isProcessing ? '⏳ 正在整理...' : '🧠 开始整理'}
+      </button>
     </div>
   `;
-  container.querySelector('#classify-btn').addEventListener('click', () => doClassify(container));
+  if (!isProcessing) {
+    container.querySelector('#classify-btn').addEventListener('click', () => doClassify());
+  }
 }
 
 // ===========================
@@ -149,8 +167,8 @@ function renderLibrary(container, topicsData) {
             ${topics.length} 个主题 · ${topics.reduce((s, t) => s + (t.notes || []).length, 0)} 条笔记
           </div>
         </div>
-        <button class="btn-ai btn-ai--small" id="classify-btn">
-          ${hasNew ? `🧠 整理新日记 (${unprocessed.length})` : '🧠 重新整理全部'}
+      <button class="btn-ai btn-ai--small" id="classify-btn" ${isProcessing ? 'disabled' : ''}>
+          ${isProcessing ? '⏳ 整理中...' : (hasNew ? `🧠 整理新日记 (${unprocessed.length})` : '🧠 重新整理全部')}
         </button>
       </div>
       ${hasNew ? `<div class="topics-hint">📌 有 ${unprocessed.length} 条新日记未整理</div>` : ''}
@@ -163,9 +181,11 @@ function renderLibrary(container, topicsData) {
 
 function setupLibraryEvents(container, topicsData, hasNew) {
   // Classify button
-  container.querySelector('#classify-btn').addEventListener('click', () => {
-    doClassify(container, hasNew ? false : true);
-  });
+  if (!isProcessing) {
+    container.querySelector('#classify-btn').addEventListener('click', () => {
+      doClassify(hasNew ? false : true);
+    });
+  }
 
   // Edit topic name
   container.querySelectorAll('.edit-topic-btn').forEach(btn => {
@@ -400,18 +420,19 @@ function mergeProposals(accepted) {
 // Classify (call AI)
 // ===========================
 
-async function doClassify(container, forceAll = false) {
-  console.log('[Topics] doClassify called, forceAll:', forceAll);
+async function doClassify(forceAll = false) {
+  if (isProcessing) {
+    showToast('⏳ 正在整理中，请稍候...');
+    return;
+  }
 
   if (!isCloudEnabled()) {
     showToast('❌ 需要云端连接才能使用 AI 整理');
-    console.error('[Topics] Cloud not enabled!');
     return;
   }
 
   const topicsData = getTopics() || { processedEntryIds: [], topics: [] };
   const allEntries = getEntriesSorted();
-  console.log('[Topics] Total entries:', allEntries.length, 'Processed:', topicsData.processedEntryIds?.length || 0);
 
   // Determine which entries to process
   let entriesToProcess;
@@ -421,36 +442,29 @@ async function doClassify(container, forceAll = false) {
     const processedIds = topicsData.processedEntryIds || [];
     entriesToProcess = allEntries.filter(e => !processedIds.includes(e.id));
     if (entriesToProcess.length === 0) {
-      entriesToProcess = allEntries; // fallback to all
+      entriesToProcess = allEntries;
     }
   }
 
-  console.log('[Topics] Processing', entriesToProcess.length, 'entries');
-
-  // Loading
-  container.innerHTML = `
-    <div class="page-enter" style="text-align: center; padding-top: var(--space-xxl);">
-      <div style="font-size: 3rem; margin-bottom: var(--space-lg);" class="ai-loading">🧠</div>
-      <h2 style="margin-bottom: var(--space-md);">正在拆解...</h2>
-      <p style="color: var(--text-tertiary);">AI 正在阅读 ${entriesToProcess.length} 条日记，提取原子笔记</p>
-    </div>
-  `;
+  // Start background processing
+  isProcessing = true;
+  showToast(`🧠 正在后台整理 ${entriesToProcess.length} 条日记...`);
+  showNotificationBar('⏳ AI 正在拆解日记，你可以继续浏览其他页面...');
 
   const entries = entriesToProcess.map(e => ({ id: e.id, text: e.text }));
   const existingTopics = topicsData.topics.map(t => ({ name: t.name, description: t.description }));
 
   try {
-    console.log('[Topics] Invoking Edge Function...');
     const { data, error } = await supabase.functions.invoke(FUNCTION_NAME, {
       body: { entries, existingTopics: existingTopics.length > 0 ? existingTopics : undefined },
     });
 
-    console.log('[Topics] Response:', { data, error });
+    isProcessing = false;
 
     if (error) {
       console.error('[Topics] Classification error:', error);
       showToast('❌ 整理失败: ' + (error.message || '未知错误'));
-      renderTopics(container);
+      removeNotificationBar();
       return;
     }
 
@@ -458,17 +472,44 @@ async function doClassify(container, forceAll = false) {
     if (!proposals || !Array.isArray(proposals) || proposals.length === 0) {
       console.error('[Topics] Invalid response:', JSON.stringify(data));
       showToast('❌ AI 未返回有效结果');
-      renderTopics(container);
+      removeNotificationBar();
       return;
     }
 
-    console.log('[Topics] Got', proposals.length, 'proposals');
-    renderReview(container, proposals);
+    // Store results and notify
+    pendingProposals = proposals;
+    showNotificationBar(`✅ 整理完成！拆出 ${proposals.length} 条笔记`, true);
+    showToast(`✅ 整理完成！点击通知栏查看结果`);
   } catch (e) {
+    isProcessing = false;
     console.error('[Topics] Request failed:', e);
     showToast('❌ 网络错误: ' + e.message);
-    renderTopics(container);
+    removeNotificationBar();
   }
+}
+
+// ===========================
+// Notification Bar (persistent, cross-page)
+// ===========================
+
+function showNotificationBar(text, clickable = false) {
+  removeNotificationBar();
+  const bar = document.createElement('div');
+  bar.id = 'topics-notification';
+  bar.className = 'topics-notification' + (clickable ? ' topics-notification--ready' : '');
+  bar.textContent = text;
+  if (clickable) {
+    bar.style.cursor = 'pointer';
+    bar.addEventListener('click', () => {
+      window.location.hash = '/topics';
+    });
+  }
+  document.body.appendChild(bar);
+}
+
+function removeNotificationBar() {
+  const bar = document.getElementById('topics-notification');
+  if (bar) bar.remove();
 }
 
 // ===========================

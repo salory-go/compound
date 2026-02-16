@@ -1280,3 +1280,41 @@ h3 {
   border-color: rgba(255, 255, 255, 0.3);
   color: var(--text-primary);
 }
+
+/* Persistent notification bar */
+.topics-notification {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  padding: 10px 20px;
+  text-align: center;
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--accent);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.3);
+  backdrop-filter: blur(10px);
+  animation: slideDown 0.3s ease-out;
+}
+
+.topics-notification--ready {
+  background: rgba(52, 211, 153, 0.15);
+  color: #34d399;
+  border-bottom-color: rgba(52, 211, 153, 0.3);
+}
+
+.topics-notification--ready:hover {
+  background: rgba(52, 211, 153, 0.25);
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-100%);
+  }
+
+  to {
+    transform: translateY(0);
+  }
+}
