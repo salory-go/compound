@@ -12,6 +12,9 @@ import { supabase, isCloudEnabled } from '../lib/supabase.js';
 const FUNCTION_NAME = 'classify';
 
 export function renderTopics(container) {
+  // Migrate old v2 data format
+  migrateOldFormat();
+
   const topicsData = getTopics();
   const entries = getAllEntries();
   const entryCount = Object.keys(entries).length;
@@ -27,6 +30,40 @@ export function renderTopics(container) {
   }
 
   renderLibrary(container, topicsData);
+}
+
+function migrateOldFormat() {
+  const data = getTopics();
+  if (!data || !data.topics) return;
+  let changed = false;
+  // Ensure processedEntryIds
+  if (!data.processedEntryIds) {
+    data.processedEntryIds = [];
+    changed = true;
+  }
+  // Migrate entries→notes and remove old fields
+  for (const t of data.topics) {
+    if (!t.notes && t.entries) {
+      t.notes = t.entries.map(e => ({
+        id: `n_migrated_${Math.random().toString(36).slice(2, 6)}`,
+        source: e.id || 'unknown',
+        content: e.excerpt || e.content || '',
+        ts: Date.now(),
+      }));
+      delete t.entries;
+      changed = true;
+    }
+    if (!t.notes && t.entryIds) {
+      t.notes = [];
+      delete t.entryIds;
+      changed = true;
+    }
+    if (!t.notes) {
+      t.notes = [];
+      changed = true;
+    }
+  }
+  if (changed) saveTopics(data);
 }
 
 // ===========================
@@ -324,6 +361,7 @@ function renderReview(container, proposals) {
 
 function mergeProposals(accepted) {
   const topicsData = getTopics() || { processedEntryIds: [], topics: [] };
+  if (!topicsData.processedEntryIds) topicsData.processedEntryIds = [];
 
   for (const p of accepted) {
     // Find or create topic
@@ -337,6 +375,9 @@ function mergeProposals(accepted) {
       };
       topicsData.topics.push(topic);
     }
+
+    // Ensure notes array exists (guard against old data)
+    if (!topic.notes) topic.notes = [];
 
     // Add note
     topic.notes.push({
@@ -360,24 +401,31 @@ function mergeProposals(accepted) {
 // ===========================
 
 async function doClassify(container, forceAll = false) {
+  console.log('[Topics] doClassify called, forceAll:', forceAll);
+
   if (!isCloudEnabled()) {
     showToast('❌ 需要云端连接才能使用 AI 整理');
+    console.error('[Topics] Cloud not enabled!');
     return;
   }
 
   const topicsData = getTopics() || { processedEntryIds: [], topics: [] };
   const allEntries = getEntriesSorted();
+  console.log('[Topics] Total entries:', allEntries.length, 'Processed:', topicsData.processedEntryIds?.length || 0);
 
   // Determine which entries to process
   let entriesToProcess;
   if (forceAll) {
     entriesToProcess = allEntries;
   } else {
-    entriesToProcess = allEntries.filter(e => !topicsData.processedEntryIds.includes(e.id));
+    const processedIds = topicsData.processedEntryIds || [];
+    entriesToProcess = allEntries.filter(e => !processedIds.includes(e.id));
     if (entriesToProcess.length === 0) {
       entriesToProcess = allEntries; // fallback to all
     }
   }
+
+  console.log('[Topics] Processing', entriesToProcess.length, 'entries');
 
   // Loading
   container.innerHTML = `
@@ -392,29 +440,33 @@ async function doClassify(container, forceAll = false) {
   const existingTopics = topicsData.topics.map(t => ({ name: t.name, description: t.description }));
 
   try {
+    console.log('[Topics] Invoking Edge Function...');
     const { data, error } = await supabase.functions.invoke(FUNCTION_NAME, {
       body: { entries, existingTopics: existingTopics.length > 0 ? existingTopics : undefined },
     });
 
+    console.log('[Topics] Response:', { data, error });
+
     if (error) {
       console.error('[Topics] Classification error:', error);
-      showToast('❌ 整理失败，请稍后重试');
+      showToast('❌ 整理失败: ' + (error.message || '未知错误'));
       renderTopics(container);
       return;
     }
 
     const proposals = data?.proposals;
     if (!proposals || !Array.isArray(proposals) || proposals.length === 0) {
-      console.error('[Topics] Invalid response:', data);
+      console.error('[Topics] Invalid response:', JSON.stringify(data));
       showToast('❌ AI 未返回有效结果');
       renderTopics(container);
       return;
     }
 
+    console.log('[Topics] Got', proposals.length, 'proposals');
     renderReview(container, proposals);
   } catch (e) {
     console.error('[Topics] Request failed:', e);
-    showToast('❌ 网络错误，请检查连接');
+    showToast('❌ 网络错误: ' + e.message);
     renderTopics(container);
   }
 }
